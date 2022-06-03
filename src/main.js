@@ -35,7 +35,7 @@ let hashlipsGiffer = null;
 
 const buildSetup = () => {
   if (fs.existsSync(buildDir)) {
-    fs.rmdirSync(buildDir, { recursive: true });
+    fs.rmSync(buildDir, { recursive: true });
   }
   fs.mkdirSync(buildDir);
   fs.mkdirSync(`${buildDir}/json`);
@@ -80,8 +80,6 @@ const getElements = (path) => {
       if (i.includes("-")) {
         throw new Error(`layer name can not contain dashes, please fix: ${i}`);
       }
-      console.log("----------");
-      console.log(i);
       return {
         id: index,
         name: cleanName(i),
@@ -156,10 +154,30 @@ const drawBackground = () => {
   ctx.fillRect(0, 0, format.width, format.height);
 };
 
+var generatedNameList = [];
+const firstNameList = layerConfigurations[layerConfigurations.length - 1].firstNames;
+const firstNameLength = firstNameList.length;
+const lastNameList = layerConfigurations[layerConfigurations.length - 1].lastNames;
+const lastNameLength = lastNameList.length;
+const getFinalName = (name) => {
+  return name.substring(0,1) + name.substring(1).toLowerCase();
+  
+}
+const getRandomName = () => {
+  while(generatedNameList.length <= layerConfigurations[layerConfigurations.length - 1].growEditionSizeTo){
+    var firstName = getFinalName(firstNameList[Math.floor(Math.random() * firstNameLength)]);
+    var lastName = getFinalName(lastNameList[Math.floor(Math.random() * lastNameLength)]);
+    var tempName = firstName + " B. " + lastName;
+    if (!generatedNameList.includes(tempName)){
+      generatedNameList.push(tempName);
+    }
+  }
+}
+
 const addMetadata = (_dna, _edition) => {
   let dateTime = Date.now();
   let tempMetadata = {
-    name: `${namePrefix} #${_edition}`,
+    name: `#${_edition} • ${generatedNameList[_edition - 1]}`,
     description: description,
     image: `${baseUri}/${_edition}.png`,
     dna: sha1(_dna),
@@ -173,37 +191,47 @@ const addMetadata = (_dna, _edition) => {
     tempMetadata = {
       //Added metadata for solana
       name: tempMetadata.name,
-      // symbol: solanaMetadata.symbol,
-      // description: tempMetadata.description,
-      // //Added metadata for solana
-      // seller_fee_basis_points: solanaMetadata.seller_fee_basis_points,
+      symbol: solanaMetadata.symbol,
+      description: tempMetadata.description,
+      //Added metadata for solana
+      seller_fee_basis_points: solanaMetadata.seller_fee_basis_points,
       image: `${_edition}.png`,
       //Added metadata for solana
-      // external_url: solanaMetadata.external_url,
-      // edition: _edition,
-      // ...extraMetadata,
+      external_url: solanaMetadata.external_url,
+      edition: _edition,
+      ...extraMetadata,
       attributes: tempMetadata.attributes,
-      // properties: {
-      //   files: [
-      //     {
-      //       uri: `${_edition}.png`,
-      //       type: "image/png",
-      //     },
-      //   ],
-      //   category: "image",
-      //   creators: solanaMetadata.creators,
-      // },
+      properties: {
+        files: [
+          {
+            uri: `${_edition}.png`,
+            type: "image/png",
+          },
+        ],
+        category: "image",
+        creators: solanaMetadata.creators,
+      },
     };
   }
   metadataList.push(tempMetadata);
   attributesList = [];
 };
 
+const getFormattedString = (filename) => {
+  if (filename.length <= 0)return "";
+  const words = filename.split(" ");
+  let wordList = [];
+  for (var i = 0 ; i < words.length ; i++){
+    wordList.push(words[i].substring(0,1).toUpperCase() + words[i].substring(1));
+  }
+  return wordList.join(" ");
+}
+
 const addAttributes = (_element) => {
   let selectedElement = _element.layer.selectedElement;
   attributesList.push({
-    trait_type: _element.layer.name,
-    value: selectedElement.name,
+    trait_type: getFormattedString(_element.layer.name),
+    value: getFormattedString(selectedElement.name),
   });
 };
 
@@ -307,6 +335,7 @@ const isDnaUnique = (_DnaList = new Set(), _dna = "") => {
   return !_DnaList.has(_filteredDNA);
 };
 
+const constraints = layerConfigurations[layerConfigurations.length - 1].constraints;
 const createDna = (_layers) => {
   let randNum = [];
   _layers.forEach((layer) => {
@@ -328,7 +357,32 @@ const createDna = (_layers) => {
       }
     }
   });
-  return randNum.join(DNA_DELIMITER);
+  console.log(randNum.join(DNA_DELIMITER));
+  const isEnable = constraints.every((constraint) => {
+    console.log(constraint);
+    var matchSum = 0; var countSum = 0;
+    var keyCount = Object.keys(constraint).length;
+    for (var idx =  0 ; idx < _layers.length ; idx++){
+      if (constraint.hasOwnProperty(_layers[idx].name)){
+        if (constraint[_layers[idx].name].length == 0 ||
+         constraint[_layers[idx].name].includes(randNum[idx].split(":")[1].split(rarityDelimiter)[0])) {
+          matchSum++;
+        }
+        if (constraint[_layers[idx].name].length == 0 || 
+         constraint[_layers[idx].name].length == _layers[idx].elements.length) {
+          countSum++;
+        }
+      }
+    }
+    if (matchSum == keyCount && countSum != keyCount)return false;
+    return true;
+  })
+  console.log(isEnable);
+  if (!isEnable){
+    return false;
+  }else {
+    return randNum.join(DNA_DELIMITER);
+  }
 };
 
 const writeMetaData = (_data) => {
@@ -367,6 +421,8 @@ const startCreating = async () => {
   let editionCount = 1;
   let failedCount = 0;
   let abstractedIndexes = [];
+  generatedNameList = [];
+  getRandomName();
   for (
     let i = network == NETWORK.sol ? 0 : 1;
     i <= layerConfigurations[layerConfigurations.length - 1].growEditionSizeTo;
@@ -388,6 +444,7 @@ const startCreating = async () => {
       editionCount <= layerConfigurations[layerConfigIndex].growEditionSizeTo
     ) {
       let newDna = createDna(layers);
+      if (!newDna)continue;
       if (isDnaUnique(dnaList, newDna)) {
         let results = constructLayerToDna(newDna, layers);
         let loadedElements = [];
